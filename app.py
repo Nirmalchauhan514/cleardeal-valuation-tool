@@ -1,100 +1,141 @@
 import streamlit as st
 from fpdf import FPDF
 import matplotlib.pyplot as plt
-from io import BytesIO
-import tempfile
 import os
+from io import BytesIO
 
-# Area lists
-areas = {
-    "Gandhinagar": ["Sector 3", "Sector 16", "Randesan"],
-    "Ahmedabad": ["Satellite", "SG Highway", "Maninagar"],
-    "Pune": ["Baner", "Hinjewadi", "Kharadi"]
-}
+# --- Helper function to calculate price per sq. ft based on area ---
+def get_price_per_sqft(area):
+    price_map = {
+        "Vavol": 3200,
+        "Pethapur": 3100,
+        "Kalol": 2800,
+        "Randesan": 4000,
+        "Randheja": 3000,
+        "Koba": 3900,
+        "Gift City": 6500,
+        "Bhat": 3600,
+        "Sughad": 3500,
+    }
+    return price_map.get(area, 3500)
 
-# Price ranges
-price_ranges = {
-    "Gandhinagar": {"min": 1500, "avg": 5954, "max": 10150},
-    "Ahmedabad": {"min": 4200, "avg": 6136, "max": 8904},
-    "Pune": {"increase_pct": 30, "base_avg": 8000}
-}
+# --- Calculate adjusted price based on amenities ---
+def adjust_price(base_price, furnishing, overlooking, amenities, property_age):
+    price = base_price
 
-furnish_options = ["Fully Furnished", "Semi Furnished", "Unfurnished"]
-amenities = ["Swimming Pool", "Garden", "Gym", "Secured", "Covered Parking", "Club House"]
+    if furnishing == "Furnished":
+        price += 200
+    if overlooking in ["Garden", "Main road"]:
+        price += 100
 
-st.set_page_config(page_title="Multi‑City Valuation Tool", layout="centered")
-st.title("ClearDeals Property Valuation Tool")
+    amenity_bonus = {
+        "Swimming Pool": 100,
+        "Garden": 50,
+        "Club house": 80,
+        "Covered Parking": 60,
+        "Security": 50,
+    }
 
-# Inputs
-name = st.text_input("Your Name")
-contact = st.text_input("Contact Number")
-city = st.selectbox("City", list(areas.keys()))
-area = st.selectbox("Area", areas[city])
-furnishing = st.selectbox("Furnishing Level", furnish_options)
-amenity_sel = st.multiselect("Amenities", amenities)
-bhk = st.selectbox("Property Type / BHK", ["1 BHK", "2 BHK", "3 BHK", "Villa", "Commercial"])
-size = st.number_input("Property Size (sq.ft.)", min_value=100, step=50)
+    for item in amenities:
+        price += amenity_bonus.get(item, 0)
 
-# Valuation
-if st.button("Generate Valuation Report"):
-    pr = price_ranges[city]
-    if city == "Pune":
-        avg = pr["base_avg"]
-        low = avg * (1 - pr["increase_pct"]/100)
-        high = avg * (1 + pr["increase_pct"]/100)
-    else:
-        low, avg, high = pr["min"], pr["avg"], pr["max"]
+    if property_age == "0-5 years":
+        price += 100
+    elif property_age == "5-10 years":
+        price += 50
+    elif property_age == "10+ years":
+        price -= 100
 
-    val_low = low * size
-    val_avg = avg * size
-    val_high = high * size
+    return price
 
-    st.success(f"Estimated Value: Rs.{val_avg:,.0f}")
-    st.write(f"Range: Rs.{val_low:,} – Rs.{val_high:,}")
+# --- Create Graph Image ---
+def create_price_graph(price_low, price, price_high):
+    labels = ["Lower", "Middle", "Higher"]
+    values = [price_low, price, price_high]
 
-    # Chart
-    fig, ax = plt.subplots()
-    ax.bar(["Lower", "Average", "Higher"], [val_low, val_avg, val_high], color=["#ff9999","#66b3ff","#99ff99"])
-    ax.set_ylabel("Price (Rs.)")
-    ax.set_title("Valuation Price Range")
-    st.pyplot(fig)
+    plt.figure(figsize=(4, 3))
+    bars = plt.bar(labels, values)
+    plt.title("Price Range Comparison")
+    plt.ylabel("Price (INR)")
 
-    # PDF class with Arial font
-    class PDF(FPDF):
-        def header(self):
-            self.set_font("Arial", "B", 14)
-            self.cell(0, 10, "ClearDeals Property Valuation Report", ln=True, align="C")
-            self.ln(5)
-        def footer(self):
-            self.set_y(-25)
-            self.set_font("Arial", "", 8)
-            self.multi_cell(0, 10, (
-                "Disclaimer: This report is indicative based on market data as of Aug 2025. "
-                "Please consult licensed valuers. Powered by ClearDeals"), align="C")
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval, f'{int(yval)}', ha='center', va='bottom')
 
-    pdf = PDF()
+    buffer = BytesIO()
+    plt.tight_layout()
+    plt.savefig(buffer, format="png")
+    plt.close()
+    buffer.seek(0)
+    return buffer
+
+# --- Generate PDF ---
+def generate_pdf(name, contact, area, bhk, size, price, price_low, price_high):
+    pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=11)
-    pdf.multi_cell(0, 8,
-        f"Name: {name}\nContact: {contact}\nCity: {city}\nArea: {area}\n"
-        f"BHK/Type: {bhk}\nFurnishing: {furnishing}\nAmenities: {', '.join(amenity_sel) if amenity_sel else 'None'}\n"
-        f"Size (sq.ft.): {size}\n\nEstimated Value: Rs.{val_avg:,.0f}\nPrice Range: Rs.{val_low:,.0f} - Rs.{val_high:,.0f}"
-    )
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Property Valuation Report", ln=True)
 
-    # Save chart as image
-    buf = BytesIO()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        tmp.write(buf.getbuffer())
-        tmp_path = tmp.name
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(0, 10, "Valuation Powered by ClearDeals - Gandhinagar", ln=True)
+    pdf.cell(0, 10, f"Name: {name}", ln=True)
+    pdf.cell(0, 10, f"Contact: {contact}", ln=True)
+    pdf.cell(0, 10, f"Area: {area}", ln=True)
+    pdf.cell(0, 10, f"BHK: {bhk}", ln=True)
+    pdf.cell(0, 10, f"Size: {size} sq.ft", ln=True)
+    pdf.cell(0, 10, f"Estimated Price: Rs. {int(price):,}", ln=True)
+    pdf.cell(0, 10, f"Price Range: Rs. {int(price_low):,} - Rs. {int(price_high):,}", ln=True)
 
-    pdf.image(tmp_path, x=20, w=170)
-    os.remove(tmp_path)
+    # Save and insert graph
+    chart = create_price_graph(price_low, price, price_high)
+    graph_path = "price_chart.png"
+    with open(graph_path, "wb") as f:
+        f.write(chart.read())
+    pdf.image(graph_path, x=10, w=180)
 
-pdf_bytes = BytesIO()
-pdf_output = pdf.output(dest='S').encode('latin1')  # Returns string → encode to bytes
-pdf_bytes.write(pdf_output)
-pdf_bytes.seek(0)
+    # Footer
+    pdf.ln(10)
+    pdf.set_font("Arial", "I", 10)
+    pdf.cell(0, 10, "Created by: Nirmal Chauhan | Head of Gandhinagar | 6356190197", ln=True)
 
+    # Save PDF to temporary file and load as BytesIO
+    temp_pdf_path = "report_temp.pdf"
+    pdf.output(temp_pdf_path)
 
+    with open(temp_pdf_path, "rb") as f:
+        pdf_bytes = BytesIO(f.read())
+
+    os.remove(temp_pdf_path)
+    os.remove(graph_path)
+    return pdf_bytes
+
+# --- Streamlit UI ---
+st.set_page_config(page_title="ClearDeals Property Valuation Tool")
+st.title("🏡 ClearDeals Property Valuation Tool")
+
+with st.form("valuation_form"):
+    name = st.text_input("Your Name")
+    contact = st.text_input("Contact Number")
+    area = st.selectbox("Select Area", [
+        "Vavol", "Pethapur", "Kalol", "Randesan", "Randheja",
+        "Koba", "Gift City", "Bhat", "Sughad"
+    ])
+    bhk = st.selectbox("BHK", [1, 2, 3, 4, 5])
+    size = st.number_input("Built-up Area (in sq.ft)", min_value=100)
+    furnishing = st.radio("Furnishing", ["Furnished", "Unfurnished"])
+    overlooking = st.selectbox("Overlooking", ["None", "Garden", "Main road"])
+    property_age = st.selectbox("Age of Property", ["0-5 years", "5-10 years", "10+ years"])
+    amenities = st.multiselect("Amenities", ["Swimming Pool", "Garden", "Club house", "Covered Parking", "Security"])
+    submit = st.form_submit_button("Generate Valuation Report")
+
+if submit:
+    base_price = get_price_per_sqft(area)
+    price_per_sqft = adjust_price(base_price, furnishing, overlooking, amenities, property_age)
+    total_price = price_per_sqft * size
+    price_low = total_price * 0.95
+    price_high = total_price * 1.05
+
+    report_pdf = generate_pdf(name, contact, area, bhk, size, total_price, price_low, price_high)
+
+    st.success("✅ Report generated successfully!")
+    st.download_button("📄 Download Valuation Report", report_pdf, file_name="valuation_report.pdf", mime="application/pdf")
